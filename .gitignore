@@ -1,0 +1,14 @@
+.pio/
+.vscode/
+*.bin
+*.elf
+
+# 비밀 정보가 담긴 파일 — 커밋 금지
+config.ini
+src/config_generated.h
+
+# Claude Code 세션 데이터
+.claude/
+
+# 개인 메모
+아이디어.txt
