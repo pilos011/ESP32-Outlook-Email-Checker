@@ -5,8 +5,6 @@
 #include <time.h>
 
 #include "config_generated.h"
-#include "Settings.h"
-#include "Ble.h"
 #include "Led.h"
 #include "Buzzer.h"
 #include "Oauth.h"
@@ -31,8 +29,17 @@ static volatile bool s_pollBusy = false;   // 태스크 실행 중 플래그
 static volatile bool s_pollDone = false;   // 태스크 완료 → 메인루프 결과 적용
 static int           s_taskPollP = -2;     // 태스크가 기록한 우선순위 결과
 
-// ── 예약 알림 ─────────────────────────────────────────────────────────────────
-// 하드코딩 제거 → Settings::scheds[] 사용 (config.ini 기본값, BLE로 런타임 변경)
+// ── 예약 알림 (하드코딩) ──────────────────────────────────────────────────────
+// 변경 시 config.ini 의 sched_N 항목 수정 후 재빌드 필요
+// wday: 0=일 1=월 2=화 3=수 4=목 5=금 6=토 7=평일(월~금)
+struct SchedEntry { uint8_t hour, minute, wday; };
+static const SchedEntry SCHEDS[] = {
+  {8,  20, 1},   // 월요일 08:20
+  {11, 30, 7},   // 평일  11:30
+  {12, 30, 7},   // 평일  12:30
+  {17,  0, 7},   // 평일  17:00
+};
+static const int SCHED_COUNT = (int)(sizeof(SCHEDS) / sizeof(SCHEDS[0]));
 
 static int           s_beepRemaining = 0;
 static unsigned long s_beepNextAt    = 0;
@@ -53,15 +60,11 @@ static void updateDoubleBeep() {
 static void checkSchedule() {
   struct tm t;
   if (!getLocalTime(&t, 0) || t.tm_year < 120) return;
-  // (날짜, 시, 분) 3요소로 중복 방지 — 분(nowMin)만 쓰면 다음 날 같은 시각을 놓침
-  static int  s_lastFiredYday = -1;
-  static int  s_lastFiredMin  = -1;
-  int nowMin  = t.tm_hour * 60 + t.tm_min;
-  int nowYday = t.tm_yday + t.tm_year * 366;  // 날짜 식별자 (yday + year 조합)
-  // 같은 날의 같은 분이면 재발화 방지, 다른 날이면 허용
-  if (nowMin == s_lastFiredMin && nowYday == s_lastFiredYday) return;
-  for (int i = 0; i < Settings::schedCount; ++i) {
-    const SchedEntry& s = Settings::scheds[i];
+  static int s_lastFiredMin = -1;
+  int nowMin = t.tm_hour * 60 + t.tm_min;
+  if (nowMin == s_lastFiredMin) return;
+  for (int i = 0; i < SCHED_COUNT; ++i) {
+    const SchedEntry& s = SCHEDS[i];
     if (t.tm_hour != s.hour || t.tm_min != s.minute) continue;
     bool dayOk = (s.wday == 7) ? (t.tm_wday >= 1 && t.tm_wday <= 5)
                                : (t.tm_wday == (int)s.wday);
@@ -69,15 +72,14 @@ static void checkSchedule() {
     Serial.printf("[SCHED] 예약 알림 wday=%d %02d:%02d\n",
                   t.tm_wday, s.hour, s.minute);
     triggerDoubleBeep();
-    s_lastFiredMin  = nowMin;
-    s_lastFiredYday = nowYday;
+    s_lastFiredMin = nowMin;
     break;
   }
 }
 
 // ── WiFi ──────────────────────────────────────────────────────────────────────
 static void connectWifi() {
-  Serial.printf("[WIFI] %s 연결 중...\n", Settings::wifiSsid);
+  Serial.printf("[WIFI] %s 연결 중...\n", cfg::WIFI_SSID);
   led.setState(LedState::WHITE_PULSE);
 
   WiFi.setAutoReconnect(false);   // 자동 재연결 끔 — 수동으로 관리
@@ -85,7 +87,7 @@ static void connectWifi() {
   delay(200);
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
-  WiFi.begin(Settings::wifiSsid, Settings::wifiPass);
+  WiFi.begin(cfg::WIFI_SSID, cfg::WIFI_PASS);
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
@@ -131,7 +133,7 @@ static bool isWorkingHours() {
   if (!getLocalTime(&t, 0) || t.tm_year < 120) return true;  // 미동기화 → 안전값
   if (t.tm_wday == 0 || t.tm_wday == 6) return false;        // 일(0), 토(6)
   int m = t.tm_hour * 60 + t.tm_min;
-  return (m >= Settings::workStartMin) && (m < Settings::workEndMin);
+  return (m >= cfg::WORK_START_MIN) && (m < cfg::WORK_END_MIN);
 }
 
 // ── LED 복원 (비프 없이, 근무시간 재진입 시 사용) ────────────────────────────
@@ -241,237 +243,10 @@ static void pollTaskFn(void*) {
   vTaskDelete(nullptr);
 }
 
-// ── BLE 명령 처리 ─────────────────────────────────────────────────────────────
-static const char* WDAY_NAMES[] = {"일","월","화","수","목","금","토","평일"};
-
-static void handleBleCommand(const String& raw) {
-  int   sep  = raw.indexOf(':');
-  String cmd  = (sep < 0) ? raw : raw.substring(0, sep);
-  String args = (sep < 0) ? ""  : raw.substring(sep + 1);
-  cmd.toUpperCase(); cmd.trim();
-
-  // ── STATUS ───────────────────────────────────────────────────────────────
-  if (cmd == "STATUS") {
-    char buf[64];
-    Ble::send("=== 현재 설정 ===");
-    Ble::send(String("WiFi: ") + Settings::wifiSsid);
-    snprintf(buf, sizeof(buf), "밝기:%d 점멸:%dms 폴링:%ds",
-             Settings::brightness, Settings::blinkMs, Settings::pollSec);
-    Ble::send(buf);
-    snprintf(buf, sizeof(buf), "근무:%02d:%02d~%02d:%02d",
-             Settings::workStartMin/60, Settings::workStartMin%60,
-             Settings::workEndMin/60,   Settings::workEndMin%60);
-    Ble::send(buf);
-    Ble::send(String("VIP(") + Settings::vipCount + "):");
-    for (int i = 0; i < Settings::vipCount; ++i)
-      Ble::send(String(" [") + i + "] " + Settings::vip[i]);
-    Ble::send(String("예약(") + Settings::schedCount + "):");
-    for (int i = 0; i < Settings::schedCount; ++i) {
-      auto& s = Settings::scheds[i];
-      snprintf(buf, sizeof(buf), " [%d] %02d:%02d %s",
-               i, s.hour, s.minute, WDAY_NAMES[s.wday <= 7 ? s.wday : 7]);
-      Ble::send(buf);
-    }
-    Ble::send("=================");
-    return;
-  }
-
-  // ── RESET — NVS 초기화 → 재부팅 ─────────────────────────────────────────
-  if (cmd == "RESET") {
-    Ble::send("NVS 초기화 → 재부팅");
-    Settings::resetToDefaults();
-    delay(500);
-    ESP.restart();
-    return;
-  }
-
-  // ── REBOOT ───────────────────────────────────────────────────────────────
-  if (cmd == "REBOOT") {
-    Ble::send("재부팅");
-    delay(300);
-    ESP.restart();
-    return;
-  }
-
-  // ── WIFI:ssid:pass ────────────────────────────────────────────────────────
-  if (cmd == "WIFI") {
-    int s2 = args.indexOf(':');
-    if (s2 < 1) { Ble::send("ERR: WIFI:ssid:pass"); return; }
-    String ssid = args.substring(0, s2);
-    String pass = args.substring(s2 + 1);
-    ssid.trim();
-    if (ssid.length() == 0) { Ble::send("ERR: ssid 비어있음"); return; }
-    strncpy(Settings::wifiSsid, ssid.c_str(), sizeof(Settings::wifiSsid) - 1);
-    strncpy(Settings::wifiPass, pass.c_str(), sizeof(Settings::wifiPass) - 1);
-    Settings::saveAll();
-    Ble::send("OK 저장 → 재연결 중...");
-    s_wifiDead    = false;
-    wifiFailCount = 0;
-    connectWifi();
-    if (WiFi.status() == WL_CONNECTED) {
-      restoreLed(lastPriority);
-      Ble::send("OK 연결됨: " + WiFi.localIP().toString());
-    } else {
-      Ble::send("ERR: WiFi 연결 실패");
-    }
-    return;
-  }
-
-  // ── BRIGHT:n (0~255, 즉시 적용) ───────────────────────────────────────────
-  if (cmd == "BRIGHT") {
-    // 빈 문자열이나 비숫자 → toInt()=0으로 잘못 적용되는 버그 방지 (SCHED:del 동일 패턴)
-    bool allDigits = args.length() > 0;
-    for (char c : args) if (!isdigit((unsigned char)c)) { allDigits = false; break; }
-    if (!allDigits) { Ble::send("ERR: BRIGHT:0~255"); return; }
-    int v = args.toInt();
-    if (v > 255) { Ble::send("ERR: 0~255"); return; }
-    Settings::brightness = v;
-    Settings::saveAll();
-    led.setBrightness((uint8_t)v);
-    Ble::send("OK brightness=" + String(v));
-    return;
-  }
-
-  // ── BLINK:ms (100~5000, 즉시 적용) ───────────────────────────────────────
-  if (cmd == "BLINK") {
-    int v = args.toInt();
-    if (v < 100 || v > 5000) { Ble::send("ERR: 100~5000ms"); return; }
-    Settings::blinkMs = v;
-    Settings::saveAll();
-    led.setBlinkMs((uint16_t)v);
-    Ble::send("OK blink=" + String(v) + "ms");
-    return;
-  }
-
-  // ── POLL:sec (5~3600, 즉시 적용) ─────────────────────────────────────────
-  if (cmd == "POLL") {
-    int v = args.toInt();
-    if (v < 5 || v > 3600) { Ble::send("ERR: 5~3600"); return; }
-    Settings::pollSec = v;
-    Settings::saveAll();
-    Ble::send("OK poll=" + String(v) + "s");
-    return;
-  }
-
-  // ── WORK:HHMM:HHMM (즉시 적용) ───────────────────────────────────────────
-  if (cmd == "WORK") {
-    int s2 = args.indexOf(':');
-    if (s2 != 4 || (int)args.length() < 9) { Ble::send("ERR: WORK:0730:1700"); return; }
-    int sh = args.substring(0,2).toInt(), sm2 = args.substring(2,4).toInt();
-    int eh = args.substring(5,7).toInt(), em2 = args.substring(7,9).toInt();
-    if (sh < 0 || sm2 < 0 || eh < 0 || em2 < 0
-        || sh > 23 || sm2 > 59 || eh > 23 || em2 > 59) { Ble::send("ERR: 시/분 범위 초과 (0730~2359)"); return; }
-    int sm = sh * 60 + sm2;
-    int em = eh * 60 + em2;
-    if (sm >= em) { Ble::send("ERR: start >= end"); return; }
-    Settings::workStartMin = sm;
-    Settings::workEndMin   = em;
-    Settings::saveAll();
-    char buf[40];
-    snprintf(buf, sizeof(buf), "OK 근무:%02d:%02d~%02d:%02d", sm/60,sm%60, em/60,em%60);
-    Ble::send(buf);
-    return;
-  }
-
-  // ── VIP:list / VIP:add:email / VIP:del:email ─────────────────────────────
-  if (cmd == "VIP") {
-    int s2 = args.indexOf(':');
-    String sub = (s2 < 0) ? args : args.substring(0, s2);
-    String val = (s2 < 0) ? ""   : args.substring(s2 + 1);
-    sub.toUpperCase(); sub.trim();
-
-    if (sub == "LIST") {
-      if (Settings::vipCount == 0) { Ble::send("(VIP 없음)"); return; }
-      for (int i = 0; i < Settings::vipCount; ++i)
-        Ble::send(String("[") + i + "] " + Settings::vip[i]);
-    } else if (sub == "ADD") {
-      val.trim(); val.toLowerCase();
-      if (Settings::addVip(val.c_str())) {
-        Settings::saveAll();
-        Ble::send("OK VIP추가: " + val);
-      } else {
-        Ble::send("ERR: 중복이거나 최대(" + String(SET_MAX_VIPS) + ")");
-      }
-    } else if (sub == "DEL") {
-      val.trim(); val.toLowerCase();
-      if (Settings::delVip(val.c_str())) {
-        Settings::saveAll();
-        Ble::send("OK VIP제거: " + val);
-      } else {
-        Ble::send("ERR: 없는 주소");
-      }
-    } else {
-      Ble::send("ERR: VIP:list / VIP:add:email / VIP:del:email");
-    }
-    return;
-  }
-
-  // ── SCHED:list / SCHED:add:HHMM:w / SCHED:del:n / SCHED:clear ───────────
-  if (cmd == "SCHED") {
-    int s2 = args.indexOf(':');
-    String sub = (s2 < 0) ? args : args.substring(0, s2);
-    String val = (s2 < 0) ? ""   : args.substring(s2 + 1);
-    sub.toUpperCase(); sub.trim();
-
-    if (sub == "LIST") {
-      if (Settings::schedCount == 0) { Ble::send("(예약 없음)"); return; }
-      for (int i = 0; i < Settings::schedCount; ++i) {
-        auto& s = Settings::scheds[i];
-        char buf[32];
-        snprintf(buf, sizeof(buf), "[%d] %02d:%02d %s",
-                 i, s.hour, s.minute, WDAY_NAMES[s.wday <= 7 ? s.wday : 7]);
-        Ble::send(buf);
-      }
-    } else if (sub == "ADD") {
-      // val = "HHMM:w"
-      int s3 = val.indexOf(':');
-      if (s3 != 4 || (int)val.length() < 6) { Ble::send("ERR: SCHED:add:HHMM:w"); return; }
-      int h = val.substring(0,2).toInt(), m = val.substring(2,4).toInt();
-      int w = val.substring(5).toInt();
-      if (h > 23 || m > 59 || w > 7) { Ble::send("ERR: 시간/요일 범위"); return; }
-      if (Settings::addSched(h, m, w)) {
-        Settings::saveAll();
-        char buf[32];
-        snprintf(buf, sizeof(buf), "OK 추가:%02d:%02d %s", h, m, WDAY_NAMES[w]);
-        Ble::send(buf);
-      } else {
-        Ble::send("ERR: 최대 " + String(SET_MAX_SCHEDS) + "개");
-      }
-    } else if (sub == "DEL") {
-      val.trim();
-      // 빈 문자열이나 비숫자 → toInt()=0 으로 index 0을 잘못 삭제하는 버그 방지
-      bool allDigits = val.length() > 0;
-      for (char c : val) if (!isdigit((unsigned char)c)) { allDigits = false; break; }
-      if (!allDigits) { Ble::send("ERR: SCHED:del:숫자 (예: SCHED:del:0)"); }
-      else {
-        int idx = val.toInt();
-        if (Settings::delSched(idx)) {
-          Settings::saveAll();
-          Ble::send("OK 삭제:[" + String(idx) + "]");
-        } else if (Settings::schedCount == 0) {
-          Ble::send("ERR: (예약 없음)");
-        } else {
-          Ble::send("ERR: 잘못된 인덱스 (0~" + String(Settings::schedCount - 1) + ")");
-        }
-      }
-    } else if (sub == "CLEAR") {
-      Settings::clearScheds();
-      Settings::saveAll();
-      Ble::send("OK 예약 전체 삭제");
-    } else {
-      Ble::send("ERR: SCHED:list/add:HHMM:w/del:n/clear");
-    }
-    return;
-  }
-
-  Ble::send("ERR: 모르는 명령 — STATUS 로 현재 설정 확인");
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
   delay(800);
-  Settings::init();   // NVS → config.ini 기본값 로드 (하드웨어 초기화 전)
   Serial.println();
   Serial.println("╔═══════════════════════════════════════════════╗");
   Serial.println("║   Outlook Mail LED — ESP32-S3-N16R8          ║");
@@ -481,16 +256,16 @@ void setup() {
     ESP.getPsramSize() >> 10, psramFound() ? "OK" : "미감지 ⚠️");
   Serial.printf("  Heap   : %u KB\n", ESP.getFreeHeap() >> 10);
   Serial.printf("  my_email  : %s\n", cfg::MY_EMAIL);
-  Serial.printf("  vip senders: %d개\n", Settings::vipCount);
-  for (int i = 0; i < Settings::vipCount; ++i)
-    Serial.printf("    - %s\n", Settings::vip[i]);
-  Serial.printf("  poll      : %d s  top_n=%d\n", Settings::pollSec, cfg::TOP_N);
+  Serial.printf("  vip senders: %d개\n", cfg::VIP_SENDERS_COUNT);
+  for (int i = 0; i < cfg::VIP_SENDERS_COUNT; ++i)
+    Serial.printf("    - %s\n", cfg::VIP_SENDERS[i]);
+  Serial.printf("  poll      : %lu ms  top_n=%d\n", cfg::POLL_INTERVAL_MS, cfg::TOP_N);
 
   // OLED 초기화
   disp.begin(cfg::OLED_SDA, cfg::OLED_SCL);
 
   // LED 자가테스트
-  led.begin(cfg::LED_PIN, Settings::brightness, Settings::blinkMs);
+  led.begin(cfg::LED_PIN, cfg::LED_BRIGHTNESS, cfg::BLINK_MS);
   led.setState(LedState::CYAN_FLASH);
   unsigned long t0 = millis();
   while (millis() - t0 < 1000) { led.update(); delay(10); }
@@ -501,9 +276,6 @@ void setup() {
   buzz.beep(80);
   unsigned long b0 = millis();
   while (millis() - b0 < 200) { buzz.update(); delay(10); }
-
-  // BLE NUS 설정 콘솔 (WiFi 연결 전 시작 — 자격증명 변경 가능)
-  Ble::begin("OutlookLED");
 
   // WiFi + NTP
   connectWifi();
@@ -558,9 +330,6 @@ void loop() {
   disp.update();
   updateDoubleBeep();
   checkSchedule();
-
-  // ── BLE 명령 처리 ────────────────────────────────────────────────────────────
-  if (Ble::hasPendingCommand()) handleBleCommand(Ble::dequeueCommand());
 
   // ── 힙 부족 → 즉시 재부팅 ──────────────────────────────────────────────────
   if (ESP.getFreeHeap() < 30000) {
@@ -644,7 +413,7 @@ void loop() {
 
   // ── 폴링 주기 도래 시 코어 0 태스크로 비동기 실행 ───────────────────────────
   if (!s_wifiDead && !s_pollBusy
-      && millis() - lastPoll >= (unsigned long)Settings::pollSec * 1000UL) {
+      && millis() - lastPoll >= cfg::POLL_INTERVAL_MS) {
     lastPoll = millis();
     if (isWorkingHours()) {
       s_pollBusy  = true;
