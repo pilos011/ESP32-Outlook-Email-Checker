@@ -661,8 +661,12 @@ void loop() {
       BaseType_t ok = xTaskCreatePinnedToCore(
           pollTaskFn, "poll", 16384, nullptr, 1, nullptr, 1);
       if (ok != pdPASS) {
-        Serial.println("[POLL] 태스크 생성 실패 → 다음 주기 재시도");
-        s_pollBusy = false;  // 실패 시 플래그 해제해 다음 폴링 허용
+        // 힙 단편화 등으로 태스크 생성 실패 → 동기 폴백으로 즉시 실행
+        // (메인루프가 수 초 멈추지만 메일 감지 누락보다 낫다)
+        Serial.printf("[POLL] 태스크 생성 실패 (maxAlloc=%u) → 동기 폴백\n",
+                      ESP.getMaxAllocHeap());
+        doPoll();
+        s_pollBusy = false;
       }
     }
   }
