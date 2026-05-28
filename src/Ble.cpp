@@ -36,25 +36,39 @@ class ServerCB : public BLEServerCallbacks {
 };
 
 // ── RX 수신 콜백 (BLE 태스크에서 호출됨) ────────────────────────────────────
+static void _dispatchCmd(const String& raw) {
+  String cmd = raw;
+  cmd.trim();
+  if (cmd.length() == 0) return;
+  portENTER_CRITICAL(&s_mux);
+  if (!s_hasPending) {     // 이전 명령이 아직 처리 중이면 드롭
+    s_pendingCmd = cmd;
+    s_hasPending = true;
+  }
+  portEXIT_CRITICAL(&s_mux);
+  Serial.printf("[BLE] rx: %s\n", cmd.c_str());
+}
+
 class RxCB : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* c) override {
     String val = c->getValue().c_str();
+    bool hadNewline = false;
+
     for (char ch : val) {
       if (ch == '\n' || ch == '\r') {
-        String cmd = s_cmdBuf;
+        hadNewline = true;
+        _dispatchCmd(s_cmdBuf);
         s_cmdBuf = "";
-        cmd.trim();
-        if (cmd.length() == 0) continue;
-        portENTER_CRITICAL(&s_mux);
-        if (!s_hasPending) {     // 이전 명령이 아직 처리 중이면 드롭
-          s_pendingCmd = cmd;
-          s_hasPending = true;
-        }
-        portEXIT_CRITICAL(&s_mux);
-        Serial.printf("[BLE] rx: %s\n", cmd.c_str());
       } else {
         if (s_cmdBuf.length() < 128) s_cmdBuf += ch;   // 오버플로 방지
       }
+    }
+
+    // 개행 없이 단일 Write로 전송된 경우 (nRF Connect TEXT 모드 등)
+    // — 한 번의 Write = 하나의 완성된 명령으로 처리
+    if (!hadNewline && s_cmdBuf.length() > 0) {
+      _dispatchCmd(s_cmdBuf);
+      s_cmdBuf = "";
     }
   }
 };
