@@ -84,7 +84,9 @@ static void connectWifi() {
   WiFi.disconnect(true);          // 이전 연결 + 내부 상태 완전 초기화
   delay(200);
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
+  // BLE와 WiFi 동시 사용 시 모뎀 슬립(true) 필수 — false로 끄면 ESP-IDF가 abort()
+  // (10초 폴링 주기에서 슬립 레이턴시는 무시할 수준이므로 성능 영향 없음)
+  WiFi.setSleep(true);
   WiFi.begin(Settings::wifiSsid, Settings::wifiPass);
 
   unsigned long start = millis();
