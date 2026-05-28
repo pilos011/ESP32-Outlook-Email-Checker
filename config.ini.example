@@ -74,6 +74,12 @@ freq = 2700
 ; 비프 길이 (밀리초)
 duration_ms = 200
 
+[ble]
+; BLE 설정 콘솔 접근 PIN (숫자/문자 자유, 4자리 이상 권장)
+; nRF Connect 앱에서 연결 후 첫 번째 명령: AUTH:여기에PIN
+; 잘못된 PIN은 거부되며, 연결 해제 시 자동으로 인증이 초기화됩니다.
+pin = 1234
+
 [oled]
 ; 0.91인치 128×32 SSD1306 I2C OLED
 sda = 8

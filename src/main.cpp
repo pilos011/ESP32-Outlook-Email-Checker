@@ -31,6 +31,10 @@ static volatile bool s_pollBusy = false;   // 태스크 실행 중 플래그
 static volatile bool s_pollDone = false;   // 태스크 완료 → 메인루프 결과 적용
 static int           s_taskPollP = -2;     // 태스크가 기록한 우선순위 결과
 
+// ── BLE 인증 상태 (연결 해제 시 자동 초기화) ──────────────────────────────────
+static bool s_bleAuthed   = false;  // AUTH:PIN 명령으로 인증 완료 여부
+static bool s_prevBleConn = false;  // 직전 루프의 BLE 연결 상태 (끊김 감지용)
+
 // ── 예약 알림 ─────────────────────────────────────────────────────────────────
 // 하드코딩 제거 → Settings::scheds[] 사용 (config.ini 기본값, BLE로 런타임 변경)
 
@@ -251,6 +255,25 @@ static void handleBleCommand(const String& raw) {
   String cmd  = (sep < 0) ? raw : raw.substring(0, sep);
   String args = (sep < 0) ? ""  : raw.substring(sep + 1);
   cmd.toUpperCase(); cmd.trim();
+
+  // ── AUTH:PIN (인증 — 모든 명령보다 먼저, 인증 없이도 처리) ─────────────────
+  if (cmd == "AUTH") {
+    if (args == String(cfg::BLE_PIN)) {
+      s_bleAuthed = true;
+      Ble::send("OK 인증됨");
+      Serial.println("[BLE] 인증 성공");
+    } else {
+      Ble::send("ERR: 잘못된 PIN");
+      Serial.println("[BLE] 인증 실패 (잘못된 PIN)");
+    }
+    return;
+  }
+
+  // 인증되지 않은 경우 이하 모든 명령 차단
+  if (!s_bleAuthed) {
+    Ble::send("ERR: 인증 필요 → AUTH:PIN번호");
+    return;
+  }
 
   // ── STATUS ───────────────────────────────────────────────────────────────
   if (cmd == "STATUS") {
@@ -560,6 +583,16 @@ void loop() {
   disp.update();
   updateDoubleBeep();
   checkSchedule();
+
+  // ── BLE 연결 해제 감지 → 인증 초기화 ────────────────────────────────────────
+  {
+    bool nowConn = Ble::isConnected();
+    if (s_prevBleConn && !nowConn) {
+      s_bleAuthed = false;
+      Serial.println("[BLE] 연결 끊김 → 인증 초기화");
+    }
+    s_prevBleConn = nowConn;
+  }
 
   // ── BLE 명령 처리 ────────────────────────────────────────────────────────────
   if (Ble::hasPendingCommand()) handleBleCommand(Ble::dequeueCommand());

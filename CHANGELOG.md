@@ -6,6 +6,31 @@
 
 ---
 
+## [v1.0.3] — 2026-05-28
+
+### 신기능
+
+**BLE 앱수준 PIN 인증**
+- BLE 연결 후 첫 명령은 반드시 `AUTH:PIN번호` (예: `AUTH:1234`)
+- 잘못된 PIN → `ERR: 잘못된 PIN`; 미인증 명령 → `ERR: 인증 필요 → AUTH:PIN번호`
+- BLE 연결 해제 시 인증 상태 자동 초기화 (재연결 시 재인증 필요)
+- PIN은 `config.ini` `[ble]` 섹션의 `pin` 키로 설정 (컴파일 시 적용)
+
+### 버그 수정
+
+**최초 부팅 시 NVS `NOT_FOUND` 에러 로그 수정**
+- 증상: 최초 부팅 또는 `RESET` 후 `[E][Preferences.cpp:50] begin(): nvs_open failed: NOT_FOUND` ×2 출력
+- 원인: `Settings::init()`에서 `_prefs.begin(NVS_NS, readOnly=true)` 사용 시, NVS 네임스페이스가 아직 없으면 `nvs_open(NVS_READONLY)` 실패
+- 수정: `readOnly=false` (read-write)로 오픈 → 최초 부팅에도 네임스페이스 자동 생성, 에러 없음
+
+**`No core dump partition found` 부팅 에러 수정**
+- 증상: 부팅 시 `E (302) esp_core_dump_flash: No core dump partition found!` ×2 출력
+- 원인: 파티션 테이블에 coredump 파티션 없음
+- 수정: `partitions_16MB.csv`에 64 KB coredump 파티션 추가 (`0x810000`)
+- ⚠️ **파티션 테이블 변경**: 다음 플래시 시 "Erase Flash" 또는 전체 재플래시 필요
+
+---
+
 ## [v1.0.2] — 2026-05-28
 
 ### 버그 수정

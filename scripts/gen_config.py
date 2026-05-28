@@ -62,6 +62,8 @@ def main():
     buz_volume    = get(cfg, "buzzer",   "volume",       "50")
     buz_freq      = get(cfg, "buzzer",   "freq",         "2700")
     buz_duration  = get(cfg, "buzzer",   "duration_ms",  "200")
+    ble_pin            = get(cfg, "ble",  "pin",              "1234")
+
     oled_sda           = get(cfg, "oled", "sda",              "8")
     oled_scl           = get(cfg, "oled", "scl",              "9")
     off_hours_oled_str = get(cfg, "oled", "off_hours_oled",   "idle")
@@ -119,6 +121,8 @@ namespace cfg {{
 constexpr const char* WIFI_SSID  = "{c_escape(wifi_ssid)}";
 constexpr const char* WIFI_PASS  = "{c_escape(wifi_pass)}";
 
+constexpr const char* BLE_PIN    = "{c_escape(ble_pin)}";   // BLE 설정 콘솔 접근 PIN
+
 constexpr const char* MY_EMAIL   = "{c_escape(my_email)}";
 constexpr const char* CLIENT_ID  = "{c_escape(client_id)}";
 constexpr const char* TENANT     = "{c_escape(tenant)}";
@@ -167,6 +171,7 @@ constexpr uint8_t SCHED_WDAY_DEFAULT[8] = {{ {sched_wdays} }};
 
     OUTPUT_H.write_text(header, encoding="utf-8")
     print(f">> generated {OUTPUT_H.relative_to(PROJECT_DIR)}")
+    print(f"   ble.pin            = {'*' * len(ble_pin)} ({len(ble_pin)}자리)")
     print(f"   wifi.ssid          = {wifi_ssid}")
     print(f"   outlook.my_email   = {my_email}")
     print(f"   outlook.tenant     = {tenant}")

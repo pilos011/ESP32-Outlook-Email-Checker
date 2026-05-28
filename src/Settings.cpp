@@ -98,7 +98,12 @@ void init() {
   }
 
   // 2단계: NVS 오버라이드 (키가 존재할 때만)
-  _prefs.begin(NVS_NS, true);   // read-only
+  // readOnly=false: 최초 부팅 시 네임스페이스가 없어도 자동 생성 (에러 로그 방지)
+  // readOnly=true는 네임스페이스 없을 때 nvs_open NOT_FOUND 에러를 출력함
+  if (!_prefs.begin(NVS_NS, false)) {
+    Serial.println("[CFG] NVS 오픈 실패 — 기본값 사용");
+    return;
+  }
 
   String s;
   s = _prefs.getString("wifi_ssid", "");
