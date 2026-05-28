@@ -1,0 +1,61 @@
+# Changelog
+
+모든 주요 변경 사항을 이 파일에 기록합니다.  
+형식: [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)  
+버전: [Semantic Versioning](https://semver.org/lang/ko/) (MAJOR.MINOR.PATCH)
+
+---
+
+## [v1.0.1] — 2026-05-28
+
+### 버그 수정
+
+**근무시간 중 24시간 정기 재부팅 방지**
+- 증상: 기기를 근무시간(예: 08:15)에 처음 켜면, 정확히 24시간 후 근무시간 중에 재부팅이 발생하여 메일 알림 상태가 초기화됨
+- 원인: `millis() > 86400000UL` 조건이 근무시간 여부를 고려하지 않음
+- 수정: 비근무시간까지 재부팅 유예. 25시간 초과 시 NTP 미동기화 대비 강제 재부팅
+
+**폴링 태스크 생성 실패 시 동기 폴백으로 메일 감지 보장**
+- 증상: 장시간(23h+) 구동 후 FreeRTOS 힙 단편화로 `xTaskCreatePinnedToCore(16KB)` 실패 → 07:30 근무 시작 후에도 폴링이 계속 실패 → 메일 미감지, OLED 시계만 표시
+- 원인: 태스크 생성 실패 시 10초 후 재시도하지만, 힙 상태가 동일하면 계속 실패
+- 수정: 태스크 생성 실패 시 `doPoll()`을 동기로 즉시 호출하여 메일 감지 보장
+
+---
+
+## [v1.0.0] — 2026-05-27
+
+### 최초 릴리즈
+
+**하드웨어**
+- ESP32-S3-N16R8 (16MB Flash, 8MB PSRAM)
+- WS2812 RGB LED (GPIO 48)
+- Passive Buzzer (GPIO 13)
+- 128×32 SSD1306 OLED (SDA=8, SCL=9)
+
+**핵심 기능**
+- Microsoft Outlook Graph API OAuth 2.0 (Device Code Flow) 인증
+- 받은편지함 폴링 → VIP·단독수신·일반 미확인 메일 우선순위 분류
+- 우선순위별 RGB LED (빨강 점멸 / 파랑 점멸 / 초록 고정)
+- 메일 도착 비프 알림, OLED 발신자/제목 스크롤 표시
+- 근무시간(월~금 07:30~17:00) 외 LED 소등, OLED 시계 표시
+- 예약 알림 부저 (최대 8개, config.ini 또는 BLE로 설정)
+- FreeRTOS 비동기 폴링 (OLED 시계 블로킹 방지)
+- PSRAM 활용 HTTP/JSON 처리 (64KB 버퍼)
+
+**BLE NUS 무선 설정 콘솔** (nRF Connect 앱)
+- 장치명: `OutlookLED`
+- 런타임 설정 변경 + NVS 영구 저장 (재부팅 후 유지)
+- 지원 명령: STATUS / WIFI / BRIGHT / BLINK / POLL / WORK / VIP / SCHED / RESET / REBOOT
+
+**3계층 설정 관리**
+1. `config.ini` → 빌드 시 `config_generated.h` 자동 생성 (컴파일 기본값)
+2. NVS (Non-Volatile Storage) — 부팅 시 오버라이드
+3. BLE NUS — 런타임 즉시 변경 + NVS 저장
+
+**BLE 명령 입력 검증 (버그 수정 포함)**
+- `BRIGHT:abc` 비숫자 입력 차단 (0 무음 설정 방지)
+- `WORK:-100:1700` 음수 입력 차단 (근무시간 오염 방지)
+- `SCHED:del:abc` 비숫자 입력 차단 (인덱스 0 오삭제 방지)
+- `SCHED:del` 예약 0개일 때 `"0~-1"` 오류 메시지 수정
+- 예약 스케줄 듀얼 키 중복 방지 (분+날짜 조합 → 날짜 변경 시 재발화 허용)
+- NVS poll_sec=0/blink_ms=0 로드 시 기본값 복원
