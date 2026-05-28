@@ -6,6 +6,17 @@
 
 ---
 
+## [v1.0.2] — 2026-05-28
+
+### 버그 수정
+
+**WiFi + BLE 동시 사용 시 abort() 크래시 수정**
+- 증상: BLE 광고 시작(`Ble::begin`) 후 `connectWifi()` 호출 시 즉시 `abort()` → 재부팅 반복
+- 원인: `WiFi.setSleep(false)` 호출이 BLE 활성 상태에서 ESP-IDF에 의해 금지됨. WiFi와 BLE 동시 사용 시 모뎀 슬립이 필수이며, 이를 끄면 `pm_set_sleep_type`에서 `abort()` 발생
+- 수정: `WiFi.setSleep(false)` → `WiFi.setSleep(true)` (10초 폴링 주기에서 레이턴시 영향 없음)
+
+---
+
 ## [v1.0.1] — 2026-05-28
 
 ### 버그 수정
