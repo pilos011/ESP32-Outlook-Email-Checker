@@ -564,15 +564,19 @@ void setup() {
   doPoll();
   lastPoll = millis();
 
-  // ── 부팅 시 근무시간 초기 상태 확정 (doPoll 이후 실행 — showIdle 덮어쓰기 방지) ─
+  // ── 부팅 시 근무시간 초기 상태 확정 (doPoll 이후 실행) ──────────────────────
+  // doPoll()이 메일을 찾으면 showEmail()을 호출했을 수 있으므로
+  // 비근무시간이면 OLED를 반드시 올바른 상태로 덮어씀
   if (cfg::WORK_HOURS_ONLY && !isWorkingHours()) {
     Serial.println("[TIME] 비근무시간 부팅 → 초기 상태 적용");
     led.setState(LedState::OFF);
     if (cfg::OLED_OFF_HOURS_OFF) {
       disp.clear();
       Serial.println("[TIME] OLED 소등 (off_hours_oled=off)");
+    } else {
+      disp.showIdle();   // doPoll이 showEmail()을 호출했어도 시계로 복원
+      Serial.println("[TIME] OLED 시계 표시");
     }
-    // idle 설정이면 showIdle()이 이미 호출됐으므로 그대로 유지
   }
 }
 
@@ -637,7 +641,12 @@ void loop() {
       } else {
         Serial.println("[TIME] 근무시간 시작 → LED 복원 / 폴링 재개");
         restoreLed(lastPriority);
-        disp.showIdle();         // off 상태였어도 즉시 시계로 복원
+        // LED와 OLED를 동시에 lastPriority 기준으로 복원
+        // · 메일 있으면 → 이메일 화면 (disp.showIdle() 대신 updateDisplay 사용)
+        // · 메일 없으면 → 시계 화면
+        // 폴링 완료 전에도 LED/OLED가 일치한 상태를 유지하고,
+        // 폴링 실패 시에도 마지막 알려진 상태를 표시함
+        updateDisplay(lastPriority);
         triggerDoubleBeep();     // 출근 알림 부저
         lastPoll = 0;            // 10초 대기 없이 즉시 폴링 트리거
       }
