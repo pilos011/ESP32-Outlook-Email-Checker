@@ -89,5 +89,5 @@ scl = 9
 off_hours_oled = idle
 
 ; 이메일 알림 화면 스크롤 속도 (밀리초/픽셀, 작을수록 빠름)
-scroll_subject_ms = 50
-scroll_sender_ms  = 50
+scroll_subject_ms = 20
+scroll_sender_ms  = 30

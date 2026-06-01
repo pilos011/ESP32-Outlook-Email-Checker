@@ -10,5 +10,7 @@ src/config_generated.h
 # Claude Code 세션 데이터
 .claude/
 
-# 개인 메모
+# 개인 메모 / 키 파일
 아이디어.txt
+Out-led-key.txt
+*.key.txt
