@@ -19,11 +19,12 @@ Oauth    oauth;
 Outlook  outlook;
 Display  disp;
 
-unsigned long lastPoll      = 0;
-unsigned long lastWifiCheck = 0;
-int           lastPriority  = -2;
-int           wifiFailCount = 0;
-bool          s_wifiDead    = false;
+unsigned long lastPoll          = 0;
+unsigned long lastWifiCheck     = 0;
+unsigned long s_wifiDeadRetryAt = 0;   // 포기 후 30분 재시도 예약 시각
+int           lastPriority      = -2;
+int           wifiFailCount     = 0;
+bool          s_wifiDead        = false;
 int           s_prevUnreadCount = -1;
 
 // ── 비동기 폴링 (코어 0 FreeRTOS 태스크) ─────────────────────────────────────
@@ -653,23 +654,43 @@ void loop() {
     }
   }
 
-  // ── WiFi 감시 (포기 상태이면 스킵) ───────────────────────────────────────
-  if (!s_wifiDead && millis() - lastWifiCheck > 5000) {
-    lastWifiCheck = millis();
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.printf("[WIFI] 끊김 → 재연결 (%d/3)\n", wifiFailCount + 1);
+  // ── WiFi 감시 ────────────────────────────────────────────────────────────
+  if (!s_wifiDead) {
+    // 정상 감시: 5초마다 연결 상태 확인
+    if (millis() - lastWifiCheck > 5000) {
+      lastWifiCheck = millis();
+      if (WiFi.status() != WL_CONNECTED) {
+        Serial.printf("[WIFI] 끊김 → 재연결 (%d/3)\n", wifiFailCount + 1);
+        connectWifi();
+        if (WiFi.status() == WL_CONNECTED) {
+          // 재연결 성공 → LED 즉시 복원
+          restoreLed(lastPriority);
+        } else {
+          if (++wifiFailCount >= 3) {
+            Serial.println("[WIFI] 3회 연속 실패 → 포기 / Orange LED / 30분 후 재시도 예약");
+            s_wifiDead        = true;
+            s_wifiDeadRetryAt = millis() + 1800000UL;   // 30분 후
+            led.setState(LedState::ORANGE_SLOW_BLINK);
+            disp.showWifiError();
+          }
+          // 실패: connectWifi() 가 이미 WHITE_PULSE 설정함
+        }
+      }
+    }
+  } else {
+    // 포기 상태: 30분마다 한 번 재시도 (단발 시도, 실패해도 3회 카운트 없음)
+    if (millis() >= s_wifiDeadRetryAt) {
+      Serial.println("[WIFI] 30분 재시도 중...");
       connectWifi();
       if (WiFi.status() == WL_CONNECTED) {
-        // 재연결 성공 → LED 즉시 복원
+        Serial.println("[WIFI] 재연결 성공 → 정상 복귀");
+        s_wifiDead    = false;
+        wifiFailCount = 0;
         restoreLed(lastPriority);
+        updateDisplay(lastPriority);
       } else {
-        if (++wifiFailCount >= 3) {
-          Serial.println("[WIFI] 3회 연속 실패 → 재연결 중지 / Orange LED");
-          s_wifiDead = true;
-          led.setState(LedState::ORANGE_SLOW_BLINK);
-          disp.showWifiError();
-        }
-        // 실패: connectWifi() 가 이미 WHITE_PULSE 설정함
+        Serial.println("[WIFI] 재시도 실패 → 30분 후 재시도");
+        s_wifiDeadRetryAt = millis() + 1800000UL;   // 30분 후 재예약
       }
     }
   }
