@@ -12,6 +12,23 @@
 #include "Oauth.h"
 #include "Outlook.h"
 #include "Display.h"
+#include "EventLog.h"
+#include <esp_system.h>
+
+// ── 재부팅 원인 문자열 ────────────────────────────────────────────────────────
+static const char* resetReasonStr() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:  return "POWERON";
+    case ESP_RST_SW:       return "SW";
+    case ESP_RST_PANIC:    return "PANIC";
+    case ESP_RST_INT_WDT:  return "INT_WDT";
+    case ESP_RST_TASK_WDT: return "TASK_WDT";
+    case ESP_RST_WDT:      return "WDT";
+    case ESP_RST_BROWNOUT: return "BROWNOUT";
+    case ESP_RST_EXT:      return "EXT";
+    default:               return "UNKNOWN";
+  }
+}
 
 Led      led;
 Buzzer   buzz;
@@ -73,6 +90,10 @@ static void checkSchedule() {
     if (!dayOk) continue;
     Serial.printf("[SCHED] 예약 알림 wday=%d %02d:%02d\n",
                   t.tm_wday, s.hour, s.minute);
+    char schedDesc[20];
+    snprintf(schedDesc, sizeof(schedDesc), "%02d:%02d wday=%d",
+             s.hour, s.minute, t.tm_wday);
+    EventLog::log("BEEP_SCHED", schedDesc);
     triggerDoubleBeep();
     s_lastFiredMin  = nowMin;
     s_lastFiredYday = nowYday;
@@ -490,6 +511,17 @@ static void handleBleCommand(const String& raw) {
     return;
   }
 
+  // ── LOG / LOG:clear ──────────────────────────────────────────────────────
+  if (cmd == "LOG") {
+    if (args.equalsIgnoreCase("CLEAR")) {
+      EventLog::clear();
+      Ble::send("OK 로그 초기화");
+    } else {
+      EventLog::sendViaBle();
+    }
+    return;
+  }
+
   Ble::send("ERR: 모르는 명령 — STATUS 로 현재 설정 확인");
 }
 
@@ -497,6 +529,8 @@ static void handleBleCommand(const String& raw) {
 void setup() {
   Serial.begin(115200);
   delay(800);
+  EventLog::begin();                          // NVS 로그 상태 로드 (가장 먼저)
+  EventLog::log("BOOT", resetReasonStr());    // 재부팅 원인 기록
   Settings::init();   // NVS → config.ini 기본값 로드 (하드웨어 초기화 전)
   Serial.println();
   Serial.println("╔═══════════════════════════════════════════════╗");
@@ -533,7 +567,12 @@ void setup() {
 
   // WiFi + NTP
   connectWifi();
-  if (WiFi.status() == WL_CONNECTED) syncNtp();
+  if (WiFi.status() == WL_CONNECTED) {
+    EventLog::log("WIFI_OK", WiFi.localIP().toString().c_str());
+    syncNtp();
+  } else {
+    EventLog::log("WIFI_FAIL");
+  }
 
   // OAuth
   if (!oauth.begin()) {
@@ -549,6 +588,7 @@ void setup() {
     if (!oauth.ensureAccessToken()) {
       // NVS 보존 — 네트워크 일시 오류일 수 있음. 토큰 폐기하지 않고 5분 후 재시도.
       Serial.println("[OAUTH] 갱신 실패 → NVS 유지, 5분 후 재부팅");
+      EventLog::log("REBOOT_OAUTH");
       led.setState(LedState::YELLOW_PULSE);
       unsigned long t0 = millis();
       while (millis() - t0 < 300000UL) { led.update(); delay(20); }
@@ -562,6 +602,7 @@ void setup() {
   outlook.dumpDiagnostics(oauth.accessToken());
 
   Serial.println("[BOOT] 준비 완료 — 폴링 시작");
+  EventLog::log("BOOT_OK");
   doPoll();
   lastPoll = millis();
 
@@ -604,7 +645,10 @@ void loop() {
 
   // ── 힙 부족 → 즉시 재부팅 ──────────────────────────────────────────────────
   if (ESP.getFreeHeap() < 30000) {
-    Serial.printf("[MEM] 힙 부족 %u bytes → 재부팅\n", ESP.getFreeHeap());
+    char heapBuf[20];
+    snprintf(heapBuf, sizeof(heapBuf), "heap=%uB", ESP.getFreeHeap());
+    Serial.printf("[MEM] 힙 부족 %s → 재부팅\n", heapBuf);
+    EventLog::log("REBOOT_HEAP", heapBuf);
     delay(500);
     ESP.restart();
   }
@@ -615,8 +659,10 @@ void loop() {
   // · 25h 경과 → NTP 미동기화 등 예외 상황 대비 강제 재부팅
   if (millis() > 86400000UL) {
     if (!isWorkingHours() || millis() > 90000000UL) {
-      Serial.printf("[SYS] 24시간 정기 재부팅 (uptime=%.1fh)\n",
-                    millis() / 3600000.0f);
+      char uptimeBuf[20];
+      snprintf(uptimeBuf, sizeof(uptimeBuf), "up=%.1fh", millis() / 3600000.0f);
+      Serial.printf("[SYS] 24시간 정기 재부팅 (%s)\n", uptimeBuf);
+      EventLog::log("REBOOT_24H", uptimeBuf);
       delay(500);
       ESP.restart();
     }
@@ -641,6 +687,7 @@ void loop() {
         }
       } else {
         Serial.println("[TIME] 근무시간 시작 → LED 복원 / 폴링 재개");
+        EventLog::log("WORK_START");
         restoreLed(lastPriority);
         // LED와 OLED를 동시에 lastPriority 기준으로 복원
         // · 메일 있으면 → 이메일 화면 (disp.showIdle() 대신 updateDisplay 사용)
@@ -668,6 +715,7 @@ void loop() {
         } else {
           if (++wifiFailCount >= 3) {
             Serial.println("[WIFI] 3회 연속 실패 → 포기 / Orange LED / 30분 후 재시도 예약");
+            EventLog::log("WIFI_DEAD");
             s_wifiDead        = true;
             s_wifiDeadRetryAt = millis() + 1800000UL;   // 30분 후
             led.setState(LedState::ORANGE_SLOW_BLINK);
@@ -684,6 +732,7 @@ void loop() {
       connectWifi();
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println("[WIFI] 재연결 성공 → 정상 복귀");
+        EventLog::log("WIFI_BACK", WiFi.localIP().toString().c_str());
         s_wifiDead    = false;
         wifiFailCount = 0;
         restoreLed(lastPriority);
