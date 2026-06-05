@@ -77,6 +77,7 @@ class RxCB : public BLECharacteristicCallbacks {
 namespace Ble {
 
 void begin(const char* name) {
+  BLEDevice::setMTU(512);   // ATT MTU 협상 최대값 (기본 23→512, 폰과 협상해 결정)
   BLEDevice::init(name);
   s_server = BLEDevice::createServer();
   s_server->setCallbacks(new ServerCB());
