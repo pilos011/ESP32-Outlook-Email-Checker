@@ -6,6 +6,8 @@
 
 static const char* EV_NS  = "evlog";
 static const int   EV_MAX = 30;           // 최대 보관 이벤트 수
+// EV_MAX > 99이면 key[5] 버퍼("e99\0" = 5바이트)가 오버런함
+static_assert(EV_MAX <= 99, "EventLog: EV_MAX > 99 → key[5] 오버플로, key 배열 크기를 늘리거나 EV_MAX를 줄이세요");
 
 static Preferences _prefs;
 static int  _count  = 0;   // 현재 저장된 이벤트 수 (0~EV_MAX)
@@ -90,8 +92,9 @@ void sendViaBle() {
       char idx[6];
       snprintf(idx, sizeof(idx), "[%2d] ", i + 1);
       Ble::send(String(idx) + val);
+      // Ble::send() 내부에 청크당 delay(15)가 있으므로 추가 delay 불필요
+      // (제거 전 delay(25) 포함 시 30건 × 40ms = 1,200ms 블로킹이었음)
     }
-    delay(25);   // BLE 전송 간격 (100바이트 청크 × 15ms + 여유)
   }
 
   Ble::send("================================");

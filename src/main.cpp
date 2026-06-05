@@ -15,6 +15,9 @@
 #include "EventLog.h"
 #include <esp_system.h>
 
+// ── WiFi 포기 후 재시도 간격 ─────────────────────────────────────────────────
+static constexpr unsigned long WIFI_DEAD_RETRY_MS = 1800000UL;  // 30분
+
 // ── 재부팅 원인 문자열 ────────────────────────────────────────────────────────
 static const char* resetReasonStr() {
   switch (esp_reset_reason()) {
@@ -25,7 +28,7 @@ static const char* resetReasonStr() {
     case ESP_RST_TASK_WDT: return "TASK_WDT";
     case ESP_RST_WDT:      return "WDT";
     case ESP_RST_BROWNOUT: return "BROWNOUT";
-    case ESP_RST_EXT:      return "EXT";
+    // ESP_RST_EXT: ESP32-S3에는 외부 리셋 핀 없음, 이 케이스는 발생하지 않음
     default:               return "UNKNOWN";
   }
 }
@@ -102,8 +105,10 @@ static void checkSchedule() {
 }
 
 // ── WiFi ──────────────────────────────────────────────────────────────────────
-static void connectWifi() {
-  Serial.printf("[WIFI] %s 연결 중...\n", Settings::wifiSsid);
+// timeoutMs: 부팅 초기 연결 = 30000ms(기본값), loop() 재시도 경로 = 10000ms
+static void connectWifi(unsigned long timeoutMs = 30000) {
+  Serial.printf("[WIFI] %s 연결 중... (timeout=%lus)\n",
+                Settings::wifiSsid, timeoutMs / 1000);
   led.setState(LedState::WHITE_PULSE);
 
   WiFi.setAutoReconnect(false);   // 자동 재연결 끔 — 수동으로 관리
@@ -116,8 +121,10 @@ static void connectWifi() {
   WiFi.begin(Settings::wifiSsid, Settings::wifiPass);
 
   unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
+  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
     led.update();
+    buzz.update();   // 예약 알림 비프 시퀀스 유지
+    disp.update();   // OLED 시계 갱신 유지
     delay(50);
   }
 
@@ -648,7 +655,13 @@ void loop() {
     char heapBuf[20];
     snprintf(heapBuf, sizeof(heapBuf), "heap=%uB", ESP.getFreeHeap());
     Serial.printf("[MEM] 힙 부족 %s → 재부팅\n", heapBuf);
-    EventLog::log("REBOOT_HEAP", heapBuf);
+    // NVS 쓰기에 최소 ~4KB 연속 블록 필요 → 단편화 심하면 write 실패 가능
+    // getMaxAllocHeap()으로 실제 연속 가용 블록 확인 후 로그 기록
+    if (ESP.getMaxAllocHeap() >= 8192) {
+      EventLog::log("REBOOT_HEAP", heapBuf);
+    } else {
+      Serial.println("[MEM] 힙 단편화 심각 — EventLog 쓰기 생략");
+    }
     delay(500);
     ESP.restart();
   }
@@ -717,7 +730,7 @@ void loop() {
             Serial.println("[WIFI] 3회 연속 실패 → 포기 / Orange LED / 30분 후 재시도 예약");
             EventLog::log("WIFI_DEAD");
             s_wifiDead        = true;
-            s_wifiDeadRetryAt = millis() + 1800000UL;   // 30분 후
+            s_wifiDeadRetryAt = millis() + WIFI_DEAD_RETRY_MS;
             led.setState(LedState::ORANGE_SLOW_BLINK);
             disp.showWifiError();
           }
@@ -729,7 +742,7 @@ void loop() {
     // 포기 상태: 30분마다 한 번 재시도 (단발 시도, 실패해도 3회 카운트 없음)
     if (millis() >= s_wifiDeadRetryAt) {
       Serial.println("[WIFI] 30분 재시도 중...");
-      connectWifi();
+      connectWifi(10000);   // 재시도: 10초 타임아웃 (부팅 30초보다 짧게, loop() 블로킹 최소화)
       if (WiFi.status() == WL_CONNECTED) {
         Serial.println("[WIFI] 재연결 성공 → 정상 복귀");
         EventLog::log("WIFI_BACK", WiFi.localIP().toString().c_str());
@@ -739,7 +752,7 @@ void loop() {
         updateDisplay(lastPriority);
       } else {
         Serial.println("[WIFI] 재시도 실패 → 30분 후 재시도");
-        s_wifiDeadRetryAt = millis() + 1800000UL;   // 30분 후 재예약
+        s_wifiDeadRetryAt = millis() + WIFI_DEAD_RETRY_MS;  // 30분 후 재예약
       }
     }
   }
