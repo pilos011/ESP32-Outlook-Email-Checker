@@ -77,8 +77,10 @@ class RxCB : public BLECharacteristicCallbacks {
 namespace Ble {
 
 void begin(const char* name) {
-  BLEDevice::setMTU(512);   // ATT MTU 협상 최대값 (기본 23→512, 폰과 협상해 결정)
   BLEDevice::init(name);
+  // setMTU는 반드시 init() 후에 호출해야 함
+  // (esp_ble_gatt_set_local_mtu는 Bluedroid 활성화 후에만 유효)
+  BLEDevice::setMTU(512);   // ATT MTU 협상 최대값 설정 (폰과 협상해 결정, 최대 512)
   s_server = BLEDevice::createServer();
   s_server->setCallbacks(new ServerCB());
 
