@@ -16,6 +16,11 @@ static BLEServer*         s_server    = nullptr;
 static BLECharacteristic* s_txChar    = nullptr;
 static volatile bool      s_connected = false;
 
+// ── 협상된 ATT MTU (연결마다 갱신, 기본 최솟값 23) ───────────────────────────
+// 페이로드 = s_mtu - 3 바이트 (ATT 헤더 3바이트 제외)
+// ex) MTU=247 → 244바이트 페이로드, MTU=512 → 509바이트 페이로드
+static uint16_t s_mtu = 23;
+
 // ── 명령 큐 (BLE 태스크 → 메인 루프, portMUX 보호) ─────────────────────────
 static portMUX_TYPE  s_mux        = portMUX_INITIALIZER_UNLOCKED;
 static String        s_cmdBuf;         // 수신 중 누적 버퍼
@@ -30,8 +35,16 @@ class ServerCB : public BLEServerCallbacks {
   }
   void onDisconnect(BLEServer*) override {
     s_connected = false;
+    s_mtu = 23;   // 연결 해제 시 MTU 초기화
     Serial.println("[BLE] 연결 끊김 → 재광고");
     BLEDevice::startAdvertising();
+  }
+  // 폰이 ATT MTU Exchange를 요청하면 호출됨
+  // nRF Connect(Android/iOS)는 연결 직후 자동으로 MTU 협상을 시작함
+  void onMtuChanged(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
+    s_mtu = param->mtu.mtu;
+    Serial.printf("[BLE] MTU 협상 완료: %u → 페이로드 %u바이트/알림\n",
+                  s_mtu, s_mtu - 3u);
   }
 };
 
@@ -79,8 +92,11 @@ namespace Ble {
 void begin(const char* name) {
   BLEDevice::init(name);
   // setMTU는 반드시 init() 후에 호출해야 함
-  // (esp_ble_gatt_set_local_mtu는 Bluedroid 활성화 후에만 유효)
-  BLEDevice::setMTU(512);   // ATT MTU 협상 최대값 설정 (폰과 협상해 결정, 최대 512)
+  // esp_ble_gatt_set_local_mtu()는 Bluedroid 활성화 후에만 유효
+  // → 폰(클라이언트)이 MTU Exchange를 요청하면 min(512, 폰MTU)로 협상됨
+  // → nRF Connect(Android): 보통 247 또는 517 요청
+  BLEDevice::setMTU(512);
+
   s_server = BLEDevice::createServer();
   s_server->setCallbacks(new ServerCB());
 
@@ -126,8 +142,12 @@ void send(const String& msg) {
   if (!s_connected || !s_txChar) return;
   // 개행 보장
   String out = msg.endsWith("\n") ? msg : msg + "\n";
-  // 100바이트씩 청크 전송 (BLE 스택이 MTU에 맞게 분할)
-  const size_t CHUNK = 100;
+
+  // ATT 알림 한 건당 페이로드 = 협상된 MTU - 3 (ATT 헤더)
+  // MTU 협상 전(기본 23) → CHUNK=20, 협상 후(247 등) → CHUNK=244
+  // → 항상 MTU에 맞게 자동 조정되므로 잘림 없이 최대 효율 전송
+  const size_t CHUNK = (s_mtu > 3u) ? static_cast<size_t>(s_mtu - 3u) : 20u;
+
   for (size_t i = 0; i < out.length(); i += CHUNK) {
     String part = out.substring(i, i + CHUNK);
     s_txChar->setValue(part.c_str());
