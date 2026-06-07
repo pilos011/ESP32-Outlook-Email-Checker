@@ -56,6 +56,21 @@ void Display::showWifiError() {
   _u8g2.sendBuffer();
 }
 
+// ── OAuth 에러 화면 ───────────────────────────────────────────────────────────
+// OAuth 토큰 갱신 3회 연속 실패 시 표시 — update()에서 갱신 안 됨 (고정 화면)
+void Display::showOAuthError() {
+  _mode = Mode::NONE;
+  _u8g2.clearBuffer();
+  _u8g2.setFont(u8g2_font_5x7_tf);
+  // Line 1: "OAuth Error" 중앙 정렬  (baseline y=11)
+  int x1 = (OLED_W - (int)_u8g2.getStrWidth("OAuth Error")) / 2;
+  _u8g2.drawStr(x1, 11, "OAuth Error");
+  // Line 2: 복구 방법 힌트 (baseline y=26)
+  int x2 = (OLED_W - (int)_u8g2.getStrWidth("BLE: REBOOT")) / 2;
+  _u8g2.drawStr(x2, 26, "BLE: REBOOT");
+  _u8g2.sendBuffer();
+}
+
 // ── 1) 인증 화면 ──────────────────────────────────────────────────────────────
 void Display::showAuth(const char* userCode) {
   _mode = Mode::AUTH;

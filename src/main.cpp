@@ -47,6 +47,13 @@ int           wifiFailCount     = 0;
 bool          s_wifiDead        = false;
 int           s_prevUnreadCount = -1;
 
+// ── OAuth 연속 실패 카운터 ─────────────────────────────────────────────────────
+// RTC RAM: ESP.restart() 후에도 유지, 파워사이클 시 0으로 초기화
+// 1~2회 실패 → 5분 후 재부팅(일시 장애 대응)
+// 3회 실패   → 재부팅 포기, Orange LED + OLED "OAuth Error" 고정 (s_oauthDead=true)
+RTC_DATA_ATTR static int s_oauthFailCount = 0;
+static bool s_oauthDead = false;  // true → 폴링·LED·OLED 변경 중단, BLE만 유지
+
 // ── 비동기 폴링 (코어 0 FreeRTOS 태스크) ─────────────────────────────────────
 static volatile bool s_pollBusy = false;   // 태스크 실행 중 플래그
 static volatile bool s_pollDone = false;   // 태스크 완료 → 메인루프 결과 적용
@@ -605,38 +612,55 @@ void setup() {
   } else {
     Serial.println("[OAUTH] refresh_token 발견 → access_token 갱신");
     if (!oauth.ensureAccessToken()) {
-      // NVS 보존 — 네트워크 일시 오류일 수 있음. 토큰 폐기하지 않고 5분 후 재시도.
-      Serial.println("[OAUTH] 갱신 실패 → NVS 유지, 5분 후 재부팅");
-      EventLog::log("REBOOT_OAUTH");
-      led.setState(LedState::YELLOW_PULSE);
-      unsigned long t0 = millis();
-      while (millis() - t0 < 300000UL) { led.update(); delay(20); }
-      ESP.restart();
+      s_oauthFailCount++;
+      Serial.printf("[OAUTH] 갱신 실패 (%d/3)\n", s_oauthFailCount);
+      if (s_oauthFailCount >= 3) {
+        // 3회 연속 실패 → 재부팅 포기
+        s_oauthFailCount = 0;   // 카운터 초기화 (다음 재부팅에서 새로 3회 시도)
+        Serial.println("[OAUTH] 3회 연속 실패 → 포기 / Orange LED / OLED 에러");
+        EventLog::log("OAUTH_DEAD");
+        s_oauthDead = true;
+        led.setState(LedState::ORANGE_SLOW_BLINK);
+        disp.showOAuthError();
+        // setup()을 완료하고 loop()로 진입
+        // BLE REBOOT 명령 또는 파워사이클로 복구
+      } else {
+        // 아직 재시도 여지 있음 → 5분 대기 후 재부팅
+        Serial.printf("[OAUTH] NVS 유지, 5분 후 재부팅 (%d/3)\n", s_oauthFailCount);
+        EventLog::log("REBOOT_OAUTH");
+        led.setState(LedState::YELLOW_PULSE);
+        unsigned long t0 = millis();
+        while (millis() - t0 < 300000UL) { led.update(); delay(20); }
+        ESP.restart();
+      }
     }
   }
 
-  led.setState(LedState::OFF);
-  disp.showIdle();
-
-  outlook.dumpDiagnostics(oauth.accessToken());
-
-  Serial.println("[BOOT] 준비 완료 — 폴링 시작");
-  EventLog::log("BOOT_OK");
-  doPoll();
-  lastPoll = millis();
-
-  // ── 부팅 시 근무시간 초기 상태 확정 (doPoll 이후 실행) ──────────────────────
-  // doPoll()이 메일을 찾으면 showEmail()을 호출했을 수 있으므로
-  // 비근무시간이면 OLED를 반드시 올바른 상태로 덮어씀
-  if (cfg::WORK_HOURS_ONLY && !isWorkingHours()) {
-    Serial.println("[TIME] 비근무시간 부팅 → 초기 상태 적용");
+  if (!s_oauthDead) {
+    // OAuth 정상 → 일반 부팅 완료 처리
     led.setState(LedState::OFF);
-    if (cfg::OLED_OFF_HOURS_OFF) {
-      disp.clear();
-      Serial.println("[TIME] OLED 소등 (off_hours_oled=off)");
-    } else {
-      disp.showIdle();   // doPoll이 showEmail()을 호출했어도 시계로 복원
-      Serial.println("[TIME] OLED 시계 표시");
+    disp.showIdle();
+
+    outlook.dumpDiagnostics(oauth.accessToken());
+
+    Serial.println("[BOOT] 준비 완료 — 폴링 시작");
+    EventLog::log("BOOT_OK");
+    doPoll();
+    lastPoll = millis();
+
+    // ── 부팅 시 근무시간 초기 상태 확정 (doPoll 이후 실행) ────────────────────
+    // doPoll()이 메일을 찾으면 showEmail()을 호출했을 수 있으므로
+    // 비근무시간이면 OLED를 반드시 올바른 상태로 덮어씀
+    if (cfg::WORK_HOURS_ONLY && !isWorkingHours()) {
+      Serial.println("[TIME] 비근무시간 부팅 → 초기 상태 적용");
+      led.setState(LedState::OFF);
+      if (cfg::OLED_OFF_HOURS_OFF) {
+        disp.clear();
+        Serial.println("[TIME] OLED 소등 (off_hours_oled=off)");
+      } else {
+        disp.showIdle();   // doPoll이 showEmail()을 호출했어도 시계로 복원
+        Serial.println("[TIME] OLED 시계 표시");
+      }
     }
   }
 }
@@ -700,33 +724,35 @@ void loop() {
     bool working = isWorkingHours();
     if (working != prevWorking) {
       prevWorking = working;
-      if (!working) {
-        Serial.println("[TIME] 비근무시간 → LED 소등 / 폴링 중단");
-        led.setState(LedState::OFF);
-        if (cfg::OLED_OFF_HOURS_OFF) {
-          disp.clear();
-          Serial.println("[TIME] OLED 소등");
+      if (!s_oauthDead) {   // OAuth 에러 상태: Orange LED/OLED 고정 유지
+        if (!working) {
+          Serial.println("[TIME] 비근무시간 → LED 소등 / 폴링 중단");
+          led.setState(LedState::OFF);
+          if (cfg::OLED_OFF_HOURS_OFF) {
+            disp.clear();
+            Serial.println("[TIME] OLED 소등");
+          } else {
+            disp.showIdle();
+            Serial.println("[TIME] OLED 시계 표시 유지");
+          }
         } else {
-          disp.showIdle();
-          Serial.println("[TIME] OLED 시계 표시 유지");
+          Serial.println("[TIME] 근무시간 시작 → LED 복원 / 폴링 재개");
+          // 실제 발화 시각을 로그에 포함 — 거짓 발화 시 07:30 이전 시각이 기록되어 진단 가능
+          char workBuf[12] = "??:??";
+          struct tm twk;
+          if (getLocalTime(&twk, 0) && twk.tm_year >= 120)
+            snprintf(workBuf, sizeof(workBuf), "%02d:%02d", twk.tm_hour, twk.tm_min);
+          EventLog::log("WORK_START", workBuf);
+          restoreLed(lastPriority);
+          // LED와 OLED를 동시에 lastPriority 기준으로 복원
+          // · 메일 있으면 → 이메일 화면 (disp.showIdle() 대신 updateDisplay 사용)
+          // · 메일 없으면 → 시계 화면
+          // 폴링 완료 전에도 LED/OLED가 일치한 상태를 유지하고,
+          // 폴링 실패 시에도 마지막 알려진 상태를 표시함
+          updateDisplay(lastPriority);
+          triggerDoubleBeep();     // 출근 알림 부저
+          lastPoll = 0;            // 10초 대기 없이 즉시 폴링 트리거
         }
-      } else {
-        Serial.println("[TIME] 근무시간 시작 → LED 복원 / 폴링 재개");
-        // 실제 발화 시각을 로그에 포함 — 거짓 발화 시 07:30 이전 시각이 기록되어 진단 가능
-        char workBuf[12] = "??:??";
-        struct tm twk;
-        if (getLocalTime(&twk, 0) && twk.tm_year >= 120)
-          snprintf(workBuf, sizeof(workBuf), "%02d:%02d", twk.tm_hour, twk.tm_min);
-        EventLog::log("WORK_START", workBuf);
-        restoreLed(lastPriority);
-        // LED와 OLED를 동시에 lastPriority 기준으로 복원
-        // · 메일 있으면 → 이메일 화면 (disp.showIdle() 대신 updateDisplay 사용)
-        // · 메일 없으면 → 시계 화면
-        // 폴링 완료 전에도 LED/OLED가 일치한 상태를 유지하고,
-        // 폴링 실패 시에도 마지막 알려진 상태를 표시함
-        updateDisplay(lastPriority);
-        triggerDoubleBeep();     // 출근 알림 부저
-        lastPoll = 0;            // 10초 대기 없이 즉시 폴링 트리거
       }
     }
   }
@@ -793,7 +819,7 @@ void loop() {
   }
 
   // ── 폴링 주기 도래 시 코어 0 태스크로 비동기 실행 ───────────────────────────
-  if (!s_wifiDead && !s_pollBusy
+  if (!s_wifiDead && !s_oauthDead && !s_pollBusy
       && millis() - lastPoll >= (unsigned long)Settings::pollSec * 1000UL) {
     lastPoll = millis();
     if (isWorkingHours()) {

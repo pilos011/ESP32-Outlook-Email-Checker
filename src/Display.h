@@ -21,6 +21,7 @@ public:
   void showEmail(const char* from, bool isCc, const char* subject);
 
   void showWifiError();          // WiFi 3회 연속 실패 — 영구 표시
+  void showOAuthError();         // OAuth 토큰 갱신 3회 실패 — 영구 표시
   void clear();
   void update();   // loop() 에서 호출 — 시간 갱신 / 제목 스크롤
 
