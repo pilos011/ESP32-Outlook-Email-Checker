@@ -159,14 +159,26 @@ static void syncNtp() {
 
 // ── 근무시간 판별 ─────────────────────────────────────────────────────────────
 // · cfg::WORK_HOURS_ONLY = false 이면 항상 true (24시간 동작)
-// · NTP 미동기화(year < 2020) 시 안전하게 true 반환
+// · NTP 미동기화(year < 2020) 또는 getLocalTime 실패 시:
+//   → s_lastKnown(마지막 유효 상태)을 반환하여 전환 억제
+//   → false로 초기화 (시간 불명 = 비근무시간 안전값 / 전환 억제 최우선)
+// ※ WiFi 재연결 중 WiFi.disconnect(true) 호출 시 LWIP/SNTP 재초기화로
+//   getLocalTime이 잠깐 실패할 수 있음. 이때 true를 반환하면 근무시간 시작
+//   전이가 거짓 발화되어 부저·LED가 잘못 동작하는 버그를 야기함.
 static bool isWorkingHours() {
-  if (!cfg::WORK_HOURS_ONLY) return true;              // 기능 비활성화 → 항상 동작
+  if (!cfg::WORK_HOURS_ONLY) return true;   // 기능 비활성화 → 항상 동작
+  static bool s_lastKnown = false;          // 마지막으로 확인된 유효 상태 (초기=비근무)
   struct tm t;
-  if (!getLocalTime(&t, 0) || t.tm_year < 120) return true;  // 미동기화 → 안전값
-  if (t.tm_wday == 0 || t.tm_wday == 6) return false;        // 일(0), 토(6)
+  if (!getLocalTime(&t, 0) || t.tm_year < 120) {
+    return s_lastKnown;   // 시간 미확인 → 마지막 유효 상태 유지 (전환 억제)
+  }
+  if (t.tm_wday == 0 || t.tm_wday == 6) {   // 일(0), 토(6)
+    s_lastKnown = false;
+    return false;
+  }
   int m = t.tm_hour * 60 + t.tm_min;
-  return (m >= Settings::workStartMin) && (m < Settings::workEndMin);
+  s_lastKnown = (m >= Settings::workStartMin) && (m < Settings::workEndMin);
+  return s_lastKnown;
 }
 
 // ── LED 복원 (비프 없이, 근무시간 재진입 시 사용) ────────────────────────────
@@ -700,7 +712,12 @@ void loop() {
         }
       } else {
         Serial.println("[TIME] 근무시간 시작 → LED 복원 / 폴링 재개");
-        EventLog::log("WORK_START");
+        // 실제 발화 시각을 로그에 포함 — 거짓 발화 시 07:30 이전 시각이 기록되어 진단 가능
+        char workBuf[12] = "??:??";
+        struct tm twk;
+        if (getLocalTime(&twk, 0) && twk.tm_year >= 120)
+          snprintf(workBuf, sizeof(workBuf), "%02d:%02d", twk.tm_hour, twk.tm_min);
+        EventLog::log("WORK_START", workBuf);
         restoreLed(lastPriority);
         // LED와 OLED를 동시에 lastPriority 기준으로 복원
         // · 메일 있으면 → 이메일 화면 (disp.showIdle() 대신 updateDisplay 사용)

@@ -6,6 +6,28 @@
 
 ---
 
+## [v1.0.7] — 2026-06-08
+
+### 버그 수정
+
+**07:30 이전에 WORK_START가 반복 발화되어 부저가 계속 울리는 문제 수정**
+
+- 증상: 07:30 이전(예: 07:17)에 부저가 반복적으로 울리고, 이벤트 로그에 `WORK_START`가 20건 이상 기록됨
+- 원인: `isWorkingHours()` 내부에서 `getLocalTime(&t, 0)` 이 실패할 때 `return true`(안전값)를 반환하는 로직이 진짜 문제를 유발함
+  - WiFi 재연결 시 `connectWifi()`가 `WiFi.disconnect(true)` → `WiFi.mode(WIFI_STA)` → `WiFi.begin()` 을 반복 호출
+  - 이 과정에서 LWIP/SNTP 스택이 재초기화되며 `getLocalTime` 이 일시적으로 실패
+  - 실패 시 `return true` → `isWorkingHours()` = 근무시간 → WORK_START 전이 발화 + 부저
+  - 다음 루프에서 `getLocalTime` 성공 → 실제 시각 07:17 < 07:30 → `return false` → WORK_END 전이
+  - 이 두 상태가 루프마다 교번하며 WORK_START가 수십 회 반복 발화
+- 수정: `isWorkingHours()` 에 `static bool s_lastKnown = false` 캐시 추가
+  - `getLocalTime` 성공 시: 결과를 `s_lastKnown` 에 저장 후 반환
+  - `getLocalTime` 실패 시: `s_lastKnown` (마지막 유효 상태) 반환 → 전환 억제
+  - 효과: 시간이 일시적으로 불확실해도 `prevWorking` 이 변하지 않아 거짓 전이 없음
+- 부가 수정: `WORK_START` 이벤트 로그에 실제 발화 시각(HH:MM) 추가
+  - 예: `WORK_START 07:30` → 정상 / `WORK_START 07:17` → 비정상(진단 가능)
+
+---
+
 ## [v1.0.6] — 2026-06-05
 
 ### 신기능
