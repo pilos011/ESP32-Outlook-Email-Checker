@@ -6,6 +6,25 @@
 
 ---
 
+## [v1.0.9] — 2026-06-08
+
+### 버그 수정
+
+**17:00 퇴근 시 OLED가 이메일 화면 그대로 남는 문제 수정**
+
+- 증상: 17:00 WORK_END 전이 시 LED는 정상 소등되나, OLED는 발신자·제목 스크롤 화면이 그대로 유지됨
+- 원인: `loop()` 실행 순서 문제
+  1. WORK_END 전이 → `disp.showIdle()` (시계로 전환) ✓
+  2. 같은 루프에서 `s_pollDone` 처리 → `updateDisplay(p)` → `disp.showEmail()` **덮어씀** ✗
+  - `applyPriority()`는 내부에 `isWorkingHours()` 가드가 있어 LED는 올바르게 동작했지만,
+    `updateDisplay()`에는 동일한 가드가 없었음
+- 수정: `s_pollDone` 결과 적용 시 `isWorkingHours()` 가드 추가
+  - `updateDisplay(p)` 및 `led.flashOnce()` 를 `isWorkingHours()` 조건 하에서만 실행
+- 추가 수정: WiFi 재연결 성공 시 LED·OLED 복원도 `isWorkingHours()` 조건 추가
+  - 비근무시간에 WiFi가 끊겼다 재연결되면 LED가 다시 켜지는 잠재 버그 방지
+
+---
+
 ## [v1.0.8] — 2026-06-08
 
 ### 버그 수정

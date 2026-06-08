@@ -766,8 +766,8 @@ void loop() {
         Serial.printf("[WIFI] 끊김 → 재연결 (%d/3)\n", wifiFailCount + 1);
         connectWifi();
         if (WiFi.status() == WL_CONNECTED) {
-          // 재연결 성공 → LED 즉시 복원
-          restoreLed(lastPriority);
+          // 재연결 성공 → 근무시간일 때만 LED 복원 (비근무시간엔 OFF 유지)
+          if (isWorkingHours()) restoreLed(lastPriority);
         } else {
           if (++wifiFailCount >= 3) {
             Serial.println("[WIFI] 3회 연속 실패 → 포기 / Orange LED / 30분 후 재시도 예약");
@@ -791,8 +791,11 @@ void loop() {
         EventLog::log("WIFI_BACK", WiFi.localIP().toString().c_str());
         s_wifiDead    = false;
         wifiFailCount = 0;
-        restoreLed(lastPriority);
-        updateDisplay(lastPriority);
+        // 근무시간일 때만 LED·OLED 복원 (비근무시간엔 OFF/시계 유지)
+        if (isWorkingHours()) {
+          restoreLed(lastPriority);
+          updateDisplay(lastPriority);
+        }
       } else {
         Serial.println("[WIFI] 재시도 실패 → 30분 후 재시도");
         s_wifiDeadRetryAt = millis() + WIFI_DEAD_RETRY_MS;  // 30분 후 재예약
@@ -809,11 +812,16 @@ void loop() {
       int  prevUnread    = s_prevUnreadCount;
       int  newUnread     = outlook.lastUnreadCount();
       s_prevUnreadCount  = newUnread;
-      applyPriority(p);
-      updateDisplay(p);
-      if (wasGreenSolid && p == (int)MailPriority::OTHER_UNREAD
-          && newUnread > prevUnread && prevUnread >= 0) {
-        led.flashOnce();
+      applyPriority(p);   // 내부에서 isWorkingHours() 체크 → 비근무시간엔 LED 변경 안 함
+      // updateDisplay는 별도 guard 필요:
+      // WORK_END가 disp.showIdle()을 호출한 직후 s_pollDone이 처리되면
+      // updateDisplay(p)가 showEmail()로 덮어써 이메일 화면이 남는 버그 방지
+      if (isWorkingHours()) {
+        updateDisplay(p);
+        if (wasGreenSolid && p == (int)MailPriority::OTHER_UNREAD
+            && newUnread > prevUnread && prevUnread >= 0) {
+          led.flashOnce();
+        }
       }
     }
   }
