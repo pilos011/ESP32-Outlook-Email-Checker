@@ -277,6 +277,7 @@ int Outlook::_analyze(JsonArray msgs) {
       subject);
 
     if (isRead) continue;
+    if (emailEquals(fromAddr, cfg::MY_EMAIL)) continue;  // 내가 보낸 메일 무시
     ++unreadCount;
 
     MailPriority p;
