@@ -766,8 +766,13 @@ void loop() {
         Serial.printf("[WIFI] 끊김 → 재연결 (%d/3)\n", wifiFailCount + 1);
         connectWifi();
         if (WiFi.status() == WL_CONNECTED) {
-          // 재연결 성공 → 근무시간일 때만 LED 복원 (비근무시간엔 OFF 유지)
-          if (isWorkingHours()) restoreLed(lastPriority);
+          // 재연결 성공
+          if (isWorkingHours()) {
+            restoreLed(lastPriority);
+          } else {
+            // 비근무시간: connectWifi()가 WHITE_PULSE로 바꾼 LED를 OFF로 되돌림
+            led.setState(LedState::OFF);
+          }
         } else {
           if (++wifiFailCount >= 3) {
             Serial.println("[WIFI] 3회 연속 실패 → 포기 / Orange LED / 30분 후 재시도 예약");
@@ -791,10 +796,15 @@ void loop() {
         EventLog::log("WIFI_BACK", WiFi.localIP().toString().c_str());
         s_wifiDead    = false;
         wifiFailCount = 0;
-        // 근무시간일 때만 LED·OLED 복원 (비근무시간엔 OFF/시계 유지)
+        // 근무시간 여부에 따라 LED·OLED 복원
         if (isWorkingHours()) {
           restoreLed(lastPriority);
           updateDisplay(lastPriority);
+        } else {
+          // 비근무시간: Orange LED + WiFiError 화면 해제 → 정상 비근무 상태로 복원
+          led.setState(LedState::OFF);
+          if (cfg::OLED_OFF_HOURS_OFF) disp.clear();
+          else                         disp.showIdle();
         }
       } else {
         Serial.println("[WIFI] 재시도 실패 → 30분 후 재시도");
