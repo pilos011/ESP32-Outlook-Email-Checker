@@ -46,6 +46,19 @@ void Display::clear() {
   _u8g2.clearDisplay();
 }
 
+// ── 인증 준비 화면 ───────────────────────────────────────────────────────────
+// Device Code Flow 시작 전 — Microsoft 서버 연결 요청 전 피드백
+void Display::showConnecting() {
+  _mode = Mode::NONE;
+  _u8g2.clearBuffer();
+  _u8g2.setFont(u8g2_font_5x7_tf);
+  const char* l1 = "OAuth setup...";
+  const char* l2 = "Connecting to MS";
+  _u8g2.drawStr((OLED_W - (int)_u8g2.getStrWidth(l1)) / 2, 11, l1);
+  _u8g2.drawStr((OLED_W - (int)_u8g2.getStrWidth(l2)) / 2, 26, l2);
+  _u8g2.sendBuffer();
+}
+
 // ── WiFi 에러 화면 ────────────────────────────────────────────────────────────
 void Display::showWifiError() {
   _mode = Mode::NONE;

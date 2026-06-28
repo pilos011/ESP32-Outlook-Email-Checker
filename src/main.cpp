@@ -604,6 +604,7 @@ void setup() {
   if (!oauth.begin()) {
     Serial.println("[OAUTH] refresh_token 없음 → Device Code Flow");
     led.setState(LedState::YELLOW_PULSE);
+    disp.showConnecting();   // Microsoft 서버 연결 전 OLED 피드백
     if (!oauth.runDeviceCodeFlow([](const char* code){ disp.showAuth(code); })) {
       led.setState(LedState::PURPLE_PULSE);
       delay(5000);

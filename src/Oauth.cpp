@@ -125,6 +125,7 @@ bool Oauth::_refreshAccess() {
 bool Oauth::runDeviceCodeFlow(void (*onCode)(const char* userCode)) {
   WiFiClientSecure client;
   client.setInsecure();
+  client.setTimeout(15);   // 15초 타임아웃 — 무한 대기 방지
   HTTPClient https;
 
   // ── 1단계: device code 요청 ──
