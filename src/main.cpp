@@ -613,26 +613,42 @@ void setup() {
   } else {
     Serial.println("[OAUTH] refresh_token 발견 → access_token 갱신");
     if (!oauth.ensureAccessToken()) {
-      s_oauthFailCount++;
-      Serial.printf("[OAUTH] 갱신 실패 (%d/3)\n", s_oauthFailCount);
-      if (s_oauthFailCount >= 3) {
-        // 3회 연속 실패 → 재부팅 포기
-        s_oauthFailCount = 0;   // 카운터 초기화 (다음 재부팅에서 새로 3회 시도)
-        Serial.println("[OAUTH] 3회 연속 실패 → 포기 / Orange LED / OLED 에러");
-        EventLog::log("OAUTH_DEAD");
-        s_oauthDead = true;
-        led.setState(LedState::ORANGE_SLOW_BLINK);
-        disp.showOAuthError();
-        // setup()을 완료하고 loop()로 진입
-        // BLE REBOOT 명령 또는 파워사이클로 복구
-      } else {
-        // 아직 재시도 여지 있음 → 5분 대기 후 재부팅
-        Serial.printf("[OAUTH] NVS 유지, 5분 후 재부팅 (%d/3)\n", s_oauthFailCount);
-        EventLog::log("REBOOT_OAUTH");
+      Serial.println("[OAUTH] 갱신 실패");
+      if (!oauth.hasRefreshToken()) {
+        // invalid_grant 등으로 refresh_token이 삭제됨 → 재시도 무의미
+        // 즉시 Device Code Flow 재실행 (5분 대기 없이)
+        Serial.println("[OAUTH] refresh_token 무효 → Device Code Flow 재실행");
+        EventLog::log("OAUTH_REAUTH");
+        s_oauthFailCount = 0;
         led.setState(LedState::YELLOW_PULSE);
-        unsigned long t0 = millis();
-        while (millis() - t0 < 300000UL) { led.update(); delay(20); }
-        ESP.restart();
+        disp.showConnecting();
+        if (!oauth.runDeviceCodeFlow([](const char* code){ disp.showAuth(code); })) {
+          led.setState(LedState::PURPLE_PULSE);
+          delay(5000);
+          ESP.restart();
+        }
+      } else {
+        s_oauthFailCount++;
+        Serial.printf("[OAUTH] 갱신 실패 (%d/3)\n", s_oauthFailCount);
+        if (s_oauthFailCount >= 3) {
+          // 3회 연속 실패 → 재부팅 포기
+          s_oauthFailCount = 0;   // 카운터 초기화 (다음 재부팅에서 새로 3회 시도)
+          Serial.println("[OAUTH] 3회 연속 실패 → 포기 / Orange LED / OLED 에러");
+          EventLog::log("OAUTH_DEAD");
+          s_oauthDead = true;
+          led.setState(LedState::ORANGE_SLOW_BLINK);
+          disp.showOAuthError();
+          // setup()을 완료하고 loop()로 진입
+          // BLE REBOOT 명령 또는 파워사이클로 복구
+        } else {
+          // 일시 장애 가능성 → 5분 대기 후 재부팅
+          Serial.printf("[OAUTH] NVS 유지, 5분 후 재부팅 (%d/3)\n", s_oauthFailCount);
+          EventLog::log("REBOOT_OAUTH");
+          led.setState(LedState::YELLOW_PULSE);
+          unsigned long t0 = millis();
+          while (millis() - t0 < 300000UL) { led.update(); delay(20); }
+          ESP.restart();
+        }
       }
     }
   }

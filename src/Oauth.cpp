@@ -93,6 +93,18 @@ bool Oauth::_refreshAccess() {
 
   if (code != 200) {
     Serial.printf("[OAUTH] refresh failed: HTTP %d\n%s\n", code, resp.c_str());
+    // invalid_grant → refresh_token 영구 무효 (MFA 만료, 비밀번호 변경 등)
+    // 재시도해도 동일하게 실패하므로 NVS에서 즉시 삭제 → Device Code Flow 유도
+    if (code == 400) {
+      JsonDocument errDoc;
+      if (!deserializeJson(errDoc, resp)) {
+        const char* errCode = errDoc["error"] | "";
+        if (strcmp(errCode, "invalid_grant") == 0) {
+          Serial.println("[OAUTH] invalid_grant → NVS refresh_token 삭제");
+          clearTokens();
+        }
+      }
+    }
     return false;
   }
 
