@@ -615,13 +615,17 @@ void setup() {
     if (!oauth.ensureAccessToken()) {
       Serial.println("[OAUTH] 갱신 실패");
       if (!oauth.hasRefreshToken()) {
-        // invalid_grant 등으로 refresh_token이 삭제됨 → 재시도 무의미
-        // 즉시 Device Code Flow 재실행 (5분 대기 없이)
-        Serial.println("[OAUTH] refresh_token 무효 → Device Code Flow 재실행");
+        // invalid_grant 등으로 refresh_token 삭제됨 → 재시도 무의미
+        // OLED에 만료 안내 표시 후 즉시 Device Code Flow 재실행
+        Serial.println("[OAUTH] refresh_token 무효 → 재인증 안내 → Device Code Flow");
         EventLog::log("OAUTH_REAUTH");
         s_oauthFailCount = 0;
+        led.setState(LedState::ORANGE_SLOW_BLINK);
+        disp.showReauth();                           // "MFA Expired / Re-auth needed"
+        unsigned long tReauth = millis();
+        while (millis() - tReauth < 3000) { led.update(); delay(20); }
         led.setState(LedState::YELLOW_PULSE);
-        disp.showConnecting();
+        disp.showConnecting();                       // "OAuth setup... / Connecting to MS"
         if (!oauth.runDeviceCodeFlow([](const char* code){ disp.showAuth(code); })) {
           led.setState(LedState::PURPLE_PULSE);
           delay(5000);

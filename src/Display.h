@@ -21,6 +21,7 @@ public:
   void showEmail(const char* from, bool isCc, const char* subject);
 
   void showConnecting();         // 최초 인증 준비 중 — Microsoft 서버 연결 전 피드백
+  void showReauth();             // refresh_token 만료 — 재인증 필요 안내
   void showWifiError();          // WiFi 3회 연속 실패 — 영구 표시
   void showOAuthError();         // OAuth 토큰 갱신 3회 실패 — 영구 표시
   void clear();

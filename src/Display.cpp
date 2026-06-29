@@ -46,6 +46,19 @@ void Display::clear() {
   _u8g2.clearDisplay();
 }
 
+// ── 재인증 필요 화면 ──────────────────────────────────────────────────────────
+// refresh_token 만료(MFA 정책 등) — 3초 표시 후 Device Code Flow로 전환
+void Display::showReauth() {
+  _mode = Mode::NONE;
+  _u8g2.clearBuffer();
+  _u8g2.setFont(u8g2_font_5x7_tf);
+  const char* l1 = "MFA Expired";
+  const char* l2 = "Re-auth needed";
+  _u8g2.drawStr((OLED_W - (int)_u8g2.getStrWidth(l1)) / 2, 11, l1);
+  _u8g2.drawStr((OLED_W - (int)_u8g2.getStrWidth(l2)) / 2, 26, l2);
+  _u8g2.sendBuffer();
+}
+
 // ── 인증 준비 화면 ───────────────────────────────────────────────────────────
 // Device Code Flow 시작 전 — Microsoft 서버 연결 요청 전 피드백
 void Display::showConnecting() {
