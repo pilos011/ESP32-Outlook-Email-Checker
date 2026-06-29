@@ -6,6 +6,82 @@
 
 ---
 
+## [v1.0.11] — 2026-06-29
+
+### 버그 수정
+
+**Device Code Flow 중 OLED 공백 + HTTPS 무한 대기 문제 수정**
+
+- 증상: NVS에 refresh_token이 없는 상태(최초 부팅 또는 NVS 초기화 후)에서 전원 투입 시
+  노란색 LED가 깜빡이고 OLED가 공백인 채 무한 대기, BLE `AUTH:` 명령도 동작 안 함
+- 원인 1 — OLED 공백: `runDeviceCodeFlow()` 가 Microsoft 서버에 device code 를 요청하는
+  HTTPS POST 응답을 받은 뒤 콜백(`disp.showAuth()`)을 호출하는 구조인데,
+  `WiFiClientSecure` 에 타임아웃이 없어 서버 무응답 시 POST 자체가 영원히 블로킹됨
+  → 콜백 호출 전 단계에서 멈춰 OLED가 비어있는 상태 유지
+- 원인 2 — BLE 명령 불가: `runDeviceCodeFlow()` 가 `setup()` 안에서 블로킹 실행 중이므로
+  `loop()` 가 시작되지 않아 BLE 명령 처리(`handleBleCommand()`)가 불가능
+- 수정
+  - `client.setTimeout(15)` 추가 (15초 타임아웃 → POST 무한 대기 방지)
+  - `runDeviceCodeFlow()` 호출 전 `disp.showConnecting()` 추가
+    → HTTPS 요청 중에도 OLED에 `"OAuth setup... / Connecting to MS"` 표시
+
+**invalid_grant 수신 시 즉시 Device Code Flow 재실행**
+
+- 증상: MFA 만료·비밀번호 변경 등으로 refresh_token이 영구 무효가 되면(HTTP 400 `invalid_grant`),
+  기존 코드는 일시 장애로 오인해 5분 × 최대 3회 재부팅 반복 후 Orange LED 고착
+- 수정
+  - `_refreshAccess()`: HTTP 400 + `invalid_grant` 수신 시 NVS refresh_token 즉시 삭제 (`clearTokens()`)
+  - `setup()`: `ensureAccessToken()` 실패 후 `hasRefreshToken() == false` 이면
+    재시도 없이 즉시 Device Code Flow 재실행 (5분 대기 불필요)
+- 로직 구분
+
+| 실패 유형 | 처리 |
+|-----------|------|
+| `invalid_grant` (토큰 영구 무효) | NVS 삭제 → 즉시 재인증 |
+| 그 외 (네트워크 일시 오류 등) | 기존 5분 × 3회 재시도 유지 |
+
+**refresh_token 만료 시 OLED 재인증 안내 화면 추가**
+
+- 증상: invalid_grant 처리 후 Device Code Flow로 전환 시 왜 재인증이 필요한지 OLED에 표시 없음
+- 수정: `Display::showReauth()` 추가 — Device Code Flow 진입 전 3초간 표시
+
+```
+OLED 표시 순서:
+  Orange LED + "MFA Expired / Re-auth needed"  (3초)
+  → Yellow LED + "OAuth setup... / Connecting to MS"
+  → "microsoft.com/devicelogin / XXXXXXXX"  (인증 코드 입력 대기)
+```
+
+이벤트 로그 태그 추가:
+
+| 태그 | 설명 |
+|------|------|
+| `OAUTH_REAUTH` | refresh_token 무효(invalid_grant) → 재인증 절차 시작 |
+
+---
+
+## [v1.0.10] — 2026-06-09
+
+### 버그 수정
+
+**내가 보낸 메일(from = MY_EMAIL) 수신 시 알림 제외**
+
+- 증상: 자신이 보낸 메일(예: 자기 자신에게 CC 포함)이 받은편지함에 수신될 경우
+  미확인 메일로 집계되어 LED 점등 및 OLED 알림이 발생
+- 수정: `Outlook::_analyze()` 에서 `from.emailAddress.address == cfg::MY_EMAIL` 인 메일은 카운트 제외
+
+**비근무시간 WiFi 복구 후 에러 LED·OLED가 07:30까지 유지되는 버그 수정**
+
+- 증상: 비근무시간(예: 새벽)에 WiFi가 끊겼다 자동 복구되어도
+  하얀색 LED + "WiFi Connect Error." OLED가 다음 날 07:30 WORK_START까지 그대로 유지됨
+- 원인: WiFi 재연결 성공 시 근무시간(`isWorkingHours() == true`) 분기에만 LED·OLED를 복원하고
+  비근무시간 분기(`else`)가 없어 `connectWifi()` 가 설정한 `WHITE_PULSE` 상태가 유지됨
+- 수정: 비근무시간 `else` 분기 추가 — 정상 재연결·dead 재시도 성공 두 경로 모두 처리
+  - LED → OFF
+  - OLED → `clear()` 또는 `showIdle()` (`OLED_OFF_HOURS_OFF` 설정에 따라)
+
+---
+
 ## [v1.0.9] — 2026-06-08
 
 ### 버그 수정
