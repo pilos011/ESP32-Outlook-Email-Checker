@@ -649,6 +649,7 @@ void setup() {
           Serial.printf("[OAUTH] NVS 유지, 5분 후 재부팅 (%d/3)\n", s_oauthFailCount);
           EventLog::log("REBOOT_OAUTH");
           led.setState(LedState::YELLOW_PULSE);
+          disp.showTokenRetry(s_oauthFailCount, 3);  // "Token refresh fail / Retry N/3 in 5min"
           unsigned long t0 = millis();
           while (millis() - t0 < 300000UL) { led.update(); delay(20); }
           ESP.restart();

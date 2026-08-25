@@ -46,6 +46,20 @@ void Display::clear() {
   _u8g2.clearDisplay();
 }
 
+// ── access_token 갱신 실패 화면 ──────────────────────────────────────────────
+// 일시 오류(네트워크 등) — 5분 후 재부팅 대기 중 표시
+void Display::showTokenRetry(int attempt, int maxAttempt) {
+  _mode = Mode::NONE;
+  _u8g2.clearBuffer();
+  _u8g2.setFont(u8g2_font_5x7_tf);
+  const char* l1 = "Token refresh fail";
+  char l2[24];
+  snprintf(l2, sizeof(l2), "Retry %d/%d in 5min", attempt, maxAttempt);
+  _u8g2.drawStr((OLED_W - (int)_u8g2.getStrWidth(l1)) / 2, 11, l1);
+  _u8g2.drawStr((OLED_W - (int)_u8g2.getStrWidth(l2)) / 2, 26, l2);
+  _u8g2.sendBuffer();
+}
+
 // ── 재인증 필요 화면 ──────────────────────────────────────────────────────────
 // refresh_token 만료(MFA 정책 등) — 3초 표시 후 Device Code Flow로 전환
 void Display::showReauth() {
