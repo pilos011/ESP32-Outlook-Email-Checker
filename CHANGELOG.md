@@ -6,6 +6,23 @@
 
 ---
 
+## [v1.0.12] — 2026-08-26
+
+### 버그 수정
+
+**access_token 갱신 일시 실패 시 OLED 공백 문제 수정**
+
+- 증상: 재시작 후 노란색 LED만 깜빡이고 OLED에 아무것도 표시되지 않은 채 5분간 대기
+  (다음 재시작에서 정상화되므로 기능 이상은 없으나 상태 파악 불가)
+- 원인: refresh_token은 있으나 access_token 갱신이 일시 실패(네트워크 순간 끊김,
+  Microsoft 서버 일시 오류 등)하는 `REBOOT_OAUTH` 경로에 OLED 업데이트 코드 없음
+  - Device Code Flow 경로(`showConnecting()`)와 달리 이 경로는 누락된 채로 있었음
+- 수정: `Display::showTokenRetry(attempt, maxAttempt)` 추가
+  - Yellow LED + `"Token refresh fail / Retry N/3 in 5min"` 표시
+  - 5분 대기 진입 직전 호출
+
+---
+
 ## [v1.0.11] — 2026-06-29
 
 ### 버그 수정
