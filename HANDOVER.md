@@ -11,7 +11,7 @@ ESP32-S3-N16R8 보드를 이용해 Microsoft Outlook 받은편지함을 폴링�
 
 - **플랫폼**: ESP32-S3-N16R8 (16MB Flash, 8MB PSRAM)
 - **빌드 도구**: PlatformIO (Arduino 프레임워크)
-- **프로젝트 경로**: `D:\Personal\outlook-led`
+- **프로젝트 경로**: `D:\AI-Projects\Personal\outlook-led`
 
 ### LED 색상 의미 (한눈에)
 
